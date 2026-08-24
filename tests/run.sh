@@ -43,7 +43,7 @@ section() { print -P "%F{cyan}== $1%f"; }
 
 # ---- load the libraries ---------------------------------------------------
 section "load libraries"
-for f in core text ini files git worktree secrets gitlab; do
+for f in core text ini files git worktree clipboard secrets gitlab; do
   if source "$ROOT/lib/$f.sh" 2>/dev/null; then ok "source lib/$f.sh"; else nope "source lib/$f.sh"; fi
 done
 
@@ -500,20 +500,90 @@ mkdir -p "$TMP/pf2"; print -r -- x > "$TMP/pf2/keep.txt"; print -r -- x > "$TMP/
 assert_status "--skip=*.txt honoured" 0 test -f "$TMP/pf2/keep.txt"
 assert_status "--skip left non-matching file renamed" 1 test -f "$TMP/pf2/move.log"
 
+# ---- clipboard.sh -----------------------------------------------------------
+section "clipboard.sh"
+assert_status "clipcopy --help -> 0"  0 clipcopy --help
+assert_status "clippaste --help -> 0" 0 clippaste --help
+assert_contains "clipcopy help lists the fallback chain" "OSC 52" "$(clipcopy --help 2>&1)"
+
+# With every backend masked, both must fail cleanly rather than hang or crash.
+(
+  unset DISPLAY WAYLAND_DISPLAY TMUX
+  _CLIP_RC=0; print -rn -- "x" | clipcopy >/dev/null 2>&1 || _CLIP_RC=$?
+  (( _CLIP_RC != 0 )) || print -r -- "UNEXPECTED_SUCCESS"
+) > "$TMP/clip.out" 2>&1
+assert_status "clipcopy with no backend does not report success" 1 grep -q UNEXPECTED_SUCCESS "$TMP/clip.out"
+
+# ---- dotfiles ---------------------------------------------------------------
+section "dotfiles"
+for d in zshrc zshenv.template; do
+  assert_status "dotfiles/$d parses"  0 zsh -n "$ROOT/dotfiles/$d"
+done
+assert_status "lib/clipboard.sh parses" 0 zsh -n "$ROOT/lib/clipboard.sh"
+
+# Sourcing the rc in an isolated HOME must be silent and non-fatal even with no
+# framework installed, and must not leave stray output on stdout.
+FAKEHOME="$TMP/fakehome"; mkdir -p "$FAKEHOME"
+RC_OUT="$(HOME="$FAKEHOME" ZDOTDIR="$FAKEHOME" zsh -f -c "source '$ROOT/dotfiles/zshrc'" 2>&1)"
+assert_eq "zshrc sources cleanly with nothing installed" "" "$RC_OUT"
+ENV_OUT="$(HOME="$FAKEHOME" ZDOTDIR="$FAKEHOME" zsh -f -c "source '$ROOT/dotfiles/zshenv.template'" 2>&1)"
+assert_eq "zshenv.template sources cleanly" "" "$ENV_OUT"
+
+# The rc must not leak the caller's environment assumptions.
+assert_status "zshrc does not require OMZ to be present" 0 \
+  env HOME="$FAKEHOME" zsh -f -c "source '$ROOT/dotfiles/zshrc'; exit 0"
+
+# venv helper
+assert_status "venv --help -> 0" 0 \
+  env HOME="$FAKEHOME" zsh -f -c "source '$ROOT/dotfiles/zshrc'; venv --help >/dev/null"
+assert_status "venv with no name and no DEFAULT_VENV -> 2" 2 \
+  env HOME="$FAKEHOME" zsh -f -c "source '$ROOT/dotfiles/zshrc'; unset DEFAULT_VENV; venv 2>/dev/null"
+assert_status "venv with a missing target -> 1" 1 \
+  env HOME="$FAKEHOME" zsh -f -c "source '$ROOT/dotfiles/zshrc'; VENV_HOME='$TMP' venv nonexistent 2>/dev/null"
+mkdir -p "$TMP/realvenv/bin"; print -r -- "VENV_ACTIVATED=1" > "$TMP/realvenv/bin/activate"
+assert_status "venv activates an existing target -> 0" 0 \
+  env HOME="$FAKEHOME" zsh -f -c "source '$ROOT/dotfiles/zshrc'; VENV_HOME='$TMP' venv realvenv"
+
+# nvm stubs must only exist when nvm.sh actually does.
+NVM_FNS="$(env HOME="$FAKEHOME" NVM_DIR="$FAKEHOME/.nvm" zsh -f -c \
+  "source '$ROOT/dotfiles/zshrc'; print -r -- \${+functions[node]}")"
+assert_eq "no nvm stubs installed when nvm.sh is absent" "0" "$NVM_FNS"
+mkdir -p "$TMP/nvm"; print -r -- "true" > "$TMP/nvm/nvm.sh"
+NVM_FNS2="$(env HOME="$FAKEHOME" NVM_DIR="$TMP/nvm" zsh -f -c \
+  "source '$ROOT/dotfiles/zshrc'; print -r -- \${+functions[node]}")"
+assert_eq "nvm stubs installed when nvm.sh is present" "1" "$NVM_FNS2"
+
+# path must stay de-duplicated no matter how often the rc is sourced.
+DUPES="$(env HOME="$FAKEHOME" zsh -f -c \
+  "source '$ROOT/dotfiles/zshrc'; source '$ROOT/dotfiles/zshrc'; source '$ROOT/dotfiles/zshrc'
+   print -l -- \$path | sort | uniq -d | grep -c . || true")"
+assert_eq "path has no duplicates after repeated sourcing" "0" "$DUPES"
+
+# The template must ship placeholders only — no usable endpoint or credential.
+assert_status "zshenv.template leaves provider routing commented" 1 \
+  grep -qE '^[[:space:]]*export ANTHROPIC_BASE_URL=' "$ROOT/dotfiles/zshenv.template"
+assert_status "zshenv.template sets no API key" 1 \
+  grep -qE '^[[:space:]]*export ANTHROPIC_API_KEY="[^$]' "$ROOT/dotfiles/zshenv.template"
+assert_status "zshenv.template sets no GITLAB_TOKEN" 1 \
+  grep -qE '^[[:space:]]*export GITLAB_TOKEN=' "$ROOT/dotfiles/zshenv.template"
+assert_contains "zshenv.template GITLAB_URL is a placeholder" "gitlab.example.com" \
+  "$(grep '^export GITLAB_URL=' "$ROOT/dotfiles/zshenv.template")"
+
 # ---- hygiene: allowlist-based, no embedded wordlist -------------------------
 section "hygiene"
 
 # Any host referenced anywhere must be a documentation placeholder or the
 # public forge. Allowlisting is used deliberately: an inline denylist of
 # specific names would itself be a leak.
-HOSTS="$(grep -rhoE '(https?://|git@)[A-Za-z0-9.-]+' "$ROOT"/lib "$ROOT"/bin "$ROOT"/README.md 2>/dev/null \
+HOSTS="$(grep -rhoE '(https?://|git@)[A-Za-z0-9.-]+' "$ROOT"/lib "$ROOT"/bin "$ROOT"/dotfiles "$ROOT"/README.md 2>/dev/null \
          | sed -E 's#^(https?://|git@)##' | sort -u \
-         | grep -vE '^(host|example\.(com|org|invalid)|gitlab\.example\.com|github\.com|localhost|127\.0\.0\.1)$' || true)"
+         | grep -vE '^(host|([a-z]+\.)?example\.(com|org|invalid)|github\.com|localhost|127\.0\.0\.1)$' || true)"
 [[ -z "$HOSTS" ]] && ok "every referenced host is a placeholder or public forge" \
                  || nope "unexpected host referenced" "$HOSTS"
 
 # No absolute paths tied to one machine or account.
-HOMEPATHS="$(grep -rnE '(/home/[a-z]|/Users/[a-z]|/mnt/[a-z]/Users)' "$ROOT"/lib "$ROOT"/bin "$ROOT"/README.md 2>/dev/null || true)"
+HOMEPATHS="$(grep -rnE '(/home/[a-z]|/Users/[a-z]|/mnt/[a-z]/Users)' "$ROOT"/lib "$ROOT"/bin "$ROOT"/dotfiles "$ROOT"/README.md 2>/dev/null \
+             | grep -vE '/home/linuxbrew' || true)"
 [[ -z "$HOMEPATHS" ]] && ok "no machine-specific absolute paths" \
                      || nope "machine-specific path" "$HOMEPATHS"
 
@@ -533,7 +603,7 @@ CREDS="$(grep -rnE "$CRED_RE" "$ROOT" 2>/dev/null || true)"
 # Every documented env var must be namespaced to this project, not inherited
 # from some other environment.
 BAREVARS="$(grep -rhoE '\$\{?[A-Z][A-Z0-9_]{3,}\}?' "$ROOT"/lib 2>/dev/null | tr -d '${}' | sort -u \
-            | grep -vE '^(HOME|TMPDIR|PATH|TERM|IFS|RANDOM|XDG_DATA_HOME|GITLAB_URL|GITLAB_TOKEN|GITLAB_SECRET_NS|GITLAB_TOKEN_DEFAULT_DAYS|SECRET_STORE_DIR|PATH_SHORTEN_MAP|WORKTREE_RO_TMPDIR|WSL_DISTRO_NAME|WSL_INTEROP|WSL_INTEROP_PROBE|BASH_SOURCE|LINENO)$' || true)"
+            | grep -vE '^(HOME|TMPDIR|PATH|TERM|IFS|RANDOM|XDG_DATA_HOME|GITLAB_URL|GITLAB_TOKEN|GITLAB_SECRET_NS|GITLAB_TOKEN_DEFAULT_DAYS|SECRET_STORE_DIR|PATH_SHORTEN_MAP|WORKTREE_RO_TMPDIR|WSL_DISTRO_NAME|WSL_INTEROP|WSL_INTEROP_PROBE|DISPLAY|WAYLAND_DISPLAY|TMUX|BASH_SOURCE|LINENO)$' || true)"
 [[ -z "$BAREVARS" ]] && ok "no undocumented external env vars referenced" \
                     || nope "undocumented env var" "$BAREVARS"
 

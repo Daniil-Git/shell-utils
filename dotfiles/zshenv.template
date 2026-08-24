@@ -1,0 +1,129 @@
+# ~/.zshenv — environment only. Copy to ~/.zshenv and replace the placeholders.
+#
+#   cp dotfiles/zshenv.template ~/.zshenv && chmod 600 ~/.zshenv
+#
+# This file is sourced by EVERY zsh — interactive shells, scripts, and anything
+# spawned by an editor or agent. So:
+#   * exports only; nothing that prints, prompts, or costs a subprocess
+#   * no prompt, plugin or completion setup — that belongs in ~/.zshrc
+#   * anything secret goes in the encrypted store (lib/secrets.sh), never here
+#
+# Every value below is a placeholder. Replace or delete as needed.
+
+# ---------------------------------------------------------------------------
+# Base
+# ---------------------------------------------------------------------------
+export EDITOR="vim"                     # or: nvim, code --wait, hx
+export VISUAL="$EDITOR"
+export PAGER="less"
+export LESS="-FRX"                      # quit-if-one-screen, keep colour, no clear
+export LANG="en_US.UTF-8"
+export LC_ALL="$LANG"
+
+export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
+export XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+
+# ---------------------------------------------------------------------------
+# shell-utils
+# ---------------------------------------------------------------------------
+export SHELL_UTILS="$XDG_DATA_HOME/shell-utils"
+
+# Encrypted secret store root (lib/secrets.sh).
+export SECRET_STORE_DIR="$XDG_DATA_HOME/secret-store"
+
+# Non-interactive gpg: point <NAMESPACE>_GPG_PASSPHRASE_FILE at a 0600 file
+# holding the passphrase. Leave unset to be prompted on /dev/tty instead.
+# export GITLAB_GPG_PASSPHRASE_FILE="$HOME/.config/secrets/gitlab.pass"
+
+# Where disposable read-only worktrees are created (lib/worktree.sh).
+# export WORKTREE_RO_TMPDIR="/tmp"
+
+# Shorten long paths in output (lib/text.sh). Longest prefix wins.
+typeset -gA PATH_SHORTEN_MAP=(
+  "$HOME/projects"  '~/pr'
+  "$HOME/work"      '~/w'
+)
+
+# ---------------------------------------------------------------------------
+# GitLab (lib/gitlab.sh) — required, no default, so a misconfigured shell
+# fails loudly instead of reaching the wrong host.
+# ---------------------------------------------------------------------------
+export GITLAB_URL="https://gitlab.example.com"
+export GITLAB_SECRET_NS="gitlab"        # secret-store namespace for the token
+export GITLAB_TOKEN_DEFAULT_DAYS="90"   # lifetime for new / rotated tokens
+# GITLAB_TOKEN is NOT set here. Store it once with:
+#   secret_set gitlab GITLAB_TOKEN
+
+# ---------------------------------------------------------------------------
+# Toolchains
+# ---------------------------------------------------------------------------
+export NVM_DIR="$HOME/.nvm"
+
+# Set to your brew prefix to enable the cached shellenv in .zshrc.
+# Linux default: /home/linuxbrew/.linuxbrew   macOS arm64: /opt/homebrew
+# export HOMEBREW_PREFIX="/home/linuxbrew/.linuxbrew"
+export HOMEBREW_NO_ANALYTICS="1"
+export HOMEBREW_NO_ENV_HINTS="1"
+
+export VENV_HOME="$HOME/.venvs"
+export DEFAULT_VENV="$VENV_HOME/main"
+export PIP_DISABLE_PIP_VERSION_CHECK="1"
+export PYTHONDONTWRITEBYTECODE="1"
+
+# export RIPGREP_CONFIG_PATH="$XDG_CONFIG_HOME/ripgrep/config"
+export DOCKER_BUILDKIT="1"
+export GPG_TTY="$TTY"                   # so gpg can prompt from a terminal
+
+# ---------------------------------------------------------------------------
+# Claude Code
+# ---------------------------------------------------------------------------
+# Provider routing and model selection are PER-USER and deliberately left
+# commented. A custom base URL is applied silently, so an inherited one from
+# someone else's dotfiles will quietly send your traffic somewhere unexpected.
+# Uncomment and fill in only on machines where you want it.
+
+# -- Telemetry and data-collection opt-outs --
+export DISABLE_TELEMETRY="1"
+export DISABLE_ERROR_REPORTING="1"
+export DISABLE_BUG_COMMAND="1"
+export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1"
+export CLAUDE_CODE_ENABLE_TELEMETRY="0"
+export DISABLE_AUTOUPDATER="1"
+
+# -- Timeouts (ms). Raise for long tool calls; lower to fail fast. --
+export BASH_DEFAULT_TIMEOUT_MS="600000"     # 10 min default per bash call
+export BASH_MAX_TIMEOUT_MS="600000"         # ceiling a call may request
+export MCP_TIMEOUT="300000"                 # MCP server startup
+export MCP_TOOL_TIMEOUT="600000"            # per MCP tool call
+export MAX_MCP_OUTPUT_TOKENS="100000"       # truncation point for MCP output
+export API_TIMEOUT_MS="3000000"
+
+# -- Retry and streaming --
+export CLAUDE_CODE_MAX_RETRIES="10"
+export API_FORCE_IDLE_TIMEOUT="1"
+
+# -- Context and caching --
+export ENABLE_PROMPT_CACHING_1H="1"
+export CLAUDE_CODE_AUTO_COMPACT_WINDOW="1000000"
+
+# -- Surface area: trim commands you never use --
+export CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY="1"
+export CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL="1"
+export DISABLE_FEEDBACK_COMMAND="1"
+
+# -- Provider routing (PER-USER — placeholders, uncomment to use) --
+# export ANTHROPIC_BASE_URL="https://api.example.com"
+# export ANTHROPIC_DEFAULT_HAIKU_MODEL="<haiku-model-id>"
+# export ANTHROPIC_CUSTOM_MODEL_OPTION="<model-id>"
+# export ANTHROPIC_CUSTOM_MODEL_OPTION_NAME="<Display Name>"
+# export ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION="<short description>"
+#
+# API keys do NOT belong in this file. Use the login flow, or a key helper:
+# export ANTHROPIC_API_KEY="$(secret_load anthropic ANTHROPIC_API_KEY >/dev/null 2>&1; print -r -- "${ANTHROPIC_API_KEY:-}")"
+
+# ---------------------------------------------------------------------------
+# Machine-specific overrides — keep real values here, out of version control.
+#   chmod 600 ~/.zshenv.local
+# ---------------------------------------------------------------------------
+[[ -r "$HOME/.zshenv.local" ]] && source "$HOME/.zshenv.local"

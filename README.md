@@ -2,7 +2,7 @@
 
 A small zsh toolkit of general-purpose shell utilities: filesystem assertions,
 safe batch git operations, disposable read-only worktrees, in-place line
-editing, INI inspection, and a GPG-backed secret store.
+editing, INI inspection, a GPG-backed secret store, and a lean set of dotfiles.
 
 Everything here is standalone — no framework, no plugin manager, and no
 assumptions about your directory layout. Each function takes what it needs as
@@ -27,7 +27,7 @@ Add to `~/.zshrc`:
 
 ```zsh
 SHELL_UTILS=~/.local/share/shell-utils
-for f in core text ini files git worktree secrets gitlab; do
+for f in core text ini files git worktree clipboard secrets gitlab; do
   source "$SHELL_UTILS/lib/$f.sh"
 done
 path=("$SHELL_UTILS/bin" $path)
@@ -108,6 +108,20 @@ Sparse checkout raises `core.repositoryformatversion` to 1, which some older
 prompt. `worktree_ro_create` avoids the bump by using git's legacy sparse
 plumbing, and `git_repo_format_v0_if_safe` repairs repos already affected.
 
+### `lib/clipboard.sh` — clipboard with fallbacks
+
+| Function | Purpose |
+|---|---|
+| `clipcopy [file]` | Copy a file, or stdin, to the clipboard |
+| `clippaste` | Print the clipboard to stdout |
+
+Backends are tried in order: WSL interop → Wayland → X11 → tmux → OSC 52. The
+OSC 52 fallback asks the terminal itself to set the clipboard, so it works over
+SSH with nothing installed on the remote host.
+
+Source this *after* `oh-my-zsh.sh` if you use OMZ — it installs a lazy stub of
+the same names that would otherwise overwrite these on first call.
+
 ### `lib/secrets.sh` — GPG secret store
 
 Secrets live at rest only as GPG AES256 ciphertext under
@@ -175,17 +189,62 @@ gitlab_token_rotate --days 90
 | `prefix-files` | Add cryptographically random prefixes to filenames, with ranges, filters, dry-run and parallelism |
 | `strip-prefix` | Remove a regex-matched prefix from filenames |
 
+
+## Dotfiles
+
+A minimal, framework-only starting point. `dotfiles/zshrc` is wiring — prompt,
+plugins, lazy loaders — and nothing else; everything with a value lives in
+`dotfiles/zshenv.template`.
+
+```sh
+cp dotfiles/zshrc          ~/.zshrc
+cp dotfiles/zshenv.template ~/.zshenv && chmod 600 ~/.zshenv
+```
+
+Then edit `~/.zshenv`: every value in it is a placeholder.
+
+**`zshrc`** — Powerlevel10k instant prompt, Oh My Zsh with three plugins
+(`git`, `zsh-autosuggestions`, `you-should-use`), lazy `nvm`, cached
+`brew shellenv`, a `venv` helper, and an optional `shell-utils` load. Each
+block is guarded, so a fresh machine with none of it installed still starts a
+working shell.
+
+Three things dominate zsh startup, and each is handled:
+
+| Cost | Treatment |
+|---|---|
+| `compinit` rebuilding the completion dump | left to OMZ, which rebuilds at most daily |
+| sourcing `nvm.sh` (0.5–1s) | lazy — stubs load it on the first `node`/`npm`/`npx`/`nvm` call |
+| `brew shellenv` subprocess | cached to a file, regenerated only when `brew` is newer |
+
+Measure yours with `time zsh -i -c exit`, or profile with
+`zsh -i -c 'zmodload zsh/zprof; source ~/.zshrc; zprof'`.
+
+**`zshenv.template`** — exports only, since `.zshenv` is read by *every* zsh
+including scripts and editor subshells. Covers locale and pager, XDG paths,
+`shell-utils` wiring, the secret store, GitLab, nvm, Homebrew, Python, and a
+Claude Code block: telemetry opt-outs, timeouts, retry and context settings.
+
+Provider routing (`ANTHROPIC_BASE_URL`, custom model ids) is deliberately left
+**commented out**. A custom base URL is applied silently with no warning, so an
+inherited one quietly sends your traffic somewhere you did not choose. Fill it
+in per machine, not in a shared file.
+
+No secrets belong in either file. `GITLAB_TOKEN` and friends go in the
+encrypted store — `secret_set gitlab GITLAB_TOKEN`. Machine-specific values go
+in `~/.zshrc.local` and `~/.zshenv.local`, both sourced last if present.
+
 ## Tests
 
 ```sh
 zsh tests/run.sh      # -v to list every passing check
 ```
 
-177 checks, fully self-contained. Scratch git repos, files and a stub GitLab
-API (on `127.0.0.1`) are created under a temp directory and torn down on exit.
-Nothing touches your repos, your dotfiles, or any external network. The gpg
-round-trip is skipped when `gpg` is absent, and the GitLab checks when `curl`,
-`jq` or `python3` are.
+199 checks, fully self-contained. Scratch git repos, files, an isolated `$HOME`
+and a stub GitLab API (on `127.0.0.1`) are created under a temp directory and
+torn down on exit. Nothing touches your repos, your real dotfiles, or any
+external network. The gpg round-trip is skipped when `gpg` is absent, and the
+GitLab checks when `curl`, `jq` or `python3` are.
 
 ## Licence
 

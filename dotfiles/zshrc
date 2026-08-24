@@ -1,0 +1,129 @@
+# ~/.zshrc — interactive shell setup. Wiring only: framework, prompt, plugins,
+# lazy loaders. Environment variables belong in ~/.zshenv (see zshenv.template).
+#
+# Startup cost is dominated by three things, all handled below:
+#   1. compinit rebuilding the completion dump  -> cached, rebuilt once a day
+#   2. sourcing nvm.sh                          -> lazy, on first node/npm call
+#   3. brew shellenv                            -> cached to a file
+#
+# Measure your own with:  time zsh -i -c exit
+# Profile it with:        zsh -i -c 'zmodload zsh/zprof; source ~/.zshrc; zprof'
+
+# ---------------------------------------------------------------------------
+# Powerlevel10k instant prompt — must stay near the top. Anything that writes
+# to the terminal or reads input has to go ABOVE this block.
+# ---------------------------------------------------------------------------
+if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
+  source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
+fi
+
+# ---------------------------------------------------------------------------
+# Shell options
+# ---------------------------------------------------------------------------
+setopt append_history hist_ignore_dups hist_ignore_space share_history
+setopt extended_history hist_expire_dups_first hist_verify
+setopt auto_cd interactive_comments no_beep
+
+HISTFILE="${HISTFILE:-$HOME/.zsh_history}"
+HISTSIZE=50000
+SAVEHIST=50000
+
+# Keep $path and $fpath free of duplicates however many times this is sourced.
+typeset -U path fpath
+path=("$HOME/.local/bin" $path)
+
+# ---------------------------------------------------------------------------
+# Oh My Zsh
+# ---------------------------------------------------------------------------
+export ZSH="${ZSH:-$HOME/.oh-my-zsh}"
+ZSH_THEME="powerlevel10k/powerlevel10k"
+
+# Deliberately short. Every plugin is startup cost paid on every shell:
+#   git                  branch/status aliases and completions
+#   zsh-autosuggestions  history-based inline suggestions
+#   you-should-use       reminds you when an alias exists for what you typed
+plugins=(git zsh-autosuggestions you-should-use)
+
+# Let OMZ manage the completion cache; it already rebuilds at most once a day.
+zstyle ':omz:update' mode disabled     # update on your schedule, not on launch
+DISABLE_MAGIC_FUNCTIONS=true           # avoids slow paste handling on big pastes
+DISABLE_AUTO_TITLE=false
+
+[[ -r "$ZSH/oh-my-zsh.sh" ]] && source "$ZSH/oh-my-zsh.sh"
+[[ -r "$HOME/.p10k.zsh" ]] && source "$HOME/.p10k.zsh"
+
+# ---------------------------------------------------------------------------
+# shell-utils (optional) — sourced after OMZ so these names win any collision.
+# Set SHELL_UTILS in ~/.zshenv. Load only what you use.
+# ---------------------------------------------------------------------------
+if [[ -n "${SHELL_UTILS:-}" && -d "$SHELL_UTILS/lib" ]]; then
+  for _f in core text ini files git worktree clipboard secrets gitlab; do
+    [[ -r "$SHELL_UTILS/lib/$_f.sh" ]] && source "$SHELL_UTILS/lib/$_f.sh"
+  done
+  unset _f
+  [[ -d "$SHELL_UTILS/bin" ]] && path=("$SHELL_UTILS/bin" $path)
+fi
+
+# ---------------------------------------------------------------------------
+# nvm — lazy. Sourcing nvm.sh is typically the single largest startup cost
+# (0.5-1s). Install stubs that load it on first use, then replay the call.
+#
+# If nvm.sh is missing, no stubs are installed at all, so `node` and friends
+# resolve through $PATH as normal. If it exists but fails to source, the stubs
+# remove themselves rather than recursing through a broken loader.
+# ---------------------------------------------------------------------------
+export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+if [[ -s "$NVM_DIR/nvm.sh" ]]; then
+  _nvm_lazy_load() {
+    unset -f nvm node npm npx _nvm_lazy_load 2>/dev/null
+    if ! source "$NVM_DIR/nvm.sh" 2>/dev/null; then
+      print -P "%F{yellow}nvm: could not source $NVM_DIR/nvm.sh — stubs removed, falling through to PATH%f" >&2
+      return 1
+    fi
+    [[ -s "$NVM_DIR/bash_completion" ]] && source "$NVM_DIR/bash_completion" 2>/dev/null
+    return 0
+  }
+  nvm()  { _nvm_lazy_load && nvm  "$@"; }
+  node() { _nvm_lazy_load && node "$@"; }
+  npm()  { _nvm_lazy_load && npm  "$@"; }
+  npx()  { _nvm_lazy_load && npx  "$@"; }
+fi
+
+# ---------------------------------------------------------------------------
+# Homebrew — `brew shellenv` costs a subprocess on every shell, so cache its
+# output and re-generate only when the brew binary is newer than the cache.
+# ---------------------------------------------------------------------------
+if [[ -n "${HOMEBREW_PREFIX:-}" && -x "$HOMEBREW_PREFIX/bin/brew" ]]; then
+  _brew_env="${XDG_CACHE_HOME:-$HOME/.cache}/brew-shellenv.zsh"
+  if [[ ! -r "$_brew_env" || "$HOMEBREW_PREFIX/bin/brew" -nt "$_brew_env" ]]; then
+    mkdir -p "${_brew_env:h}"
+    "$HOMEBREW_PREFIX/bin/brew" shellenv zsh > "$_brew_env" 2>/dev/null
+  fi
+  [[ -r "$_brew_env" ]] && source "$_brew_env"
+  unset _brew_env
+fi
+
+# ---------------------------------------------------------------------------
+# Python virtualenv helper. `venv` with no argument activates $DEFAULT_VENV.
+# ---------------------------------------------------------------------------
+venv() {
+  emulate -L zsh
+  [[ "${1:-}" == (-h|--help) ]] && {
+    print -r -- "Usage: venv [name]
+Activate a virtualenv from \$VENV_HOME (default ~/.venvs).
+With no argument, activates \$DEFAULT_VENV. Run 'deactivate' to exit."
+    return 0
+  }
+  local home="${VENV_HOME:-$HOME/.venvs}"
+  local target="${1:-${DEFAULT_VENV:-}}"
+  [[ -n "$target" ]] || { print -P "%F{red}venv: no name given and \$DEFAULT_VENV is unset%f" >&2; return 2; }
+  [[ "$target" == /* ]] || target="$home/$target"
+  [[ -r "$target/bin/activate" ]] || { print -P "%F{red}venv: no virtualenv at $target%f" >&2; return 1; }
+  source "$target/bin/activate"
+}
+
+# ---------------------------------------------------------------------------
+# Local overrides — machine-specific settings that should never be committed.
+# Keep this last so it can override anything above.
+# ---------------------------------------------------------------------------
+[[ -r "$HOME/.zshrc.local" ]] && source "$HOME/.zshrc.local"
