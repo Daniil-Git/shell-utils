@@ -1,0 +1,346 @@
+#!/usr/bin/env bash
+
+# Prevent sourcing
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+    printf '\033[31m[ERROR]\033[0m This script must be executed, not sourced.\n' >&2
+    return 3 2>/dev/null || exit 3
+fi
+
+set -euo pipefail
+#shopt -s nullglob
+
+# ---- CONSTANTS ----
+readonly PERMISSIVE_ALLOWED_CHARSET_REGEX='^[][A-Za-z0-9-]+$'
+readonly ALLOWED_CHARSET_REGEX='[A-Za-z0-9]'
+readonly ALLOWED_CHARSET_DESC='A-Za-z0-9'
+readonly DELIM_DEFAULT="_"
+
+# ---- COLORS ----
+if [[ -t 1 && "$TERM" != "dumb" ]]; then
+    C_RESET=$'\033[0m'
+    C_RED=$'\033[31m'
+    C_GREEN=$'\033[32m'
+    C_YELLOW=$'\033[33m'
+    C_CYAN=$'\033[36m'
+    C_WHITE=$'\033[97m'
+    C_GRAY=$'\033[90m'
+    BG_PURPLE=$'\033[45m'
+else
+    C_RESET="" C_RED="" C_GREEN="" C_YELLOW="" C_CYAN=""
+    C_WHITE="" C_GRAY="" BG_PURPLE=""
+fi
+
+readonly C_RESET C_RED C_GREEN C_YELLOW C_CYAN C_WHITE C_GRAY BG_PURPLE
+
+# ---- HELP ----
+show_help() {
+cat <<EOF
+Usage:
+  $0 <dir_path> [alphabet] [chars_per_row] [row_count] [job_count] [options]
+
+- Allowed characters: ${ALLOWED_CHARSET_DESC} 
+- Supports ranges like: a-z, A-Z, 0-9 
+- Supports POSIX classes: [:lower:], [:upper:], [:digit:], [:alnum:] 
+- Optional brackets: [a-z0-9]
+
+Options:
+  --dry-run                  Preview changes
+  --delim=CHARS              Override delimiter (default: "_")
+  --include=PATTERN          Filter filenames (glob or substring)
+  --exclude=PATTERN          Exclude filenames (glob or substring)  
+  --prefix-only-if-missing   Only add prefix if it's not already there
+  --case-sensitive           Case-sensitive include/exclude Filename Filtering
+  --skip=PATTERN             Skip filenames matching PATTERN (repeatable).
+                             Replaces the defaults:
+                               .*  *desktop.ini*  *Zone.Identifier*
+
+Examples:
+  $0 ./files
+  $0 ./files a-z0-9 4 2 4 --delim=- --include='Mush'
+  $0 ./files --prefix-only-if-missing
+EOF
+}
+
+# ---- FLAGS ----
+dry_run=0
+delim="$DELIM_DEFAULT"
+include=""
+exclude=""
+prefix_only_if_missing=0
+case_sensitive=0
+skip_patterns=()
+args=()
+
+while (( $# > 0 )); do
+    lower_flag="${1,,}"
+
+    case "$lower_flag" in
+        --dry-run) dry_run=1 ;;
+        --delim=*|--delimiter=*) delim="${1#*=}" ;;
+        --include=*) include="${1#*=}" ;;
+        --exclude=*) exclude="${1#*=}" ;;
+        --prefix-only-if-missing) prefix_only_if_missing=1 ;;
+        --skip=*) skip_patterns+=("${1#*=}") ;;
+	--case-sensitive|--strict-case|--case-strict|--sensitive-case) case_sensitive=1 ;;
+        -h|--help) show_help; exit 0 ;;
+        *) args+=("$1") ;;
+    esac
+    shift
+done
+
+set -- "${args[@]}"
+
+# ---- ARG VALIDATION ----
+(( $# < 1 )) && {
+    printf "%s[ERROR] No dir_path supplied.%s\n" "$C_RED" "$C_RESET" >&2
+    show_help >&2
+    exit 1
+}
+
+dir_path="$1"
+
+[[ ! -d "$dir_path" ]] && {
+    printf "%s[ERROR] Invalid dir_path: %s%s\n" "$C_RED" "$dir_path" "$C_RESET" >&2
+    exit 1
+}
+
+# ---- VALIDATE DELIM ----
+escape_regex() {
+    printf '%s' "$1" | sed -e 's/[][\.^$*+?(){}|]/\\&/g'
+} 
+ 
+[[ -z "$delim" ]] && {
+    printf "%s[ERROR] Delimiter cannot be empty%s\n" "$C_RED" "$C_RESET" >&2
+    exit 1
+}
+
+delim_escaped="$(escape_regex "$delim")"
+
+
+readonly dir_path delim delim_escaped 
+
+
+# ---- MATCH INPUTS ----
+
+readonly include exclude
+matches_filter() {
+    local name="$1"
+    local pattern="$2"
+    local cs="$case_sensitive"
+
+    [[ -z "$pattern" ]] && return 0
+
+    # helper: case fold without shopt side effects
+    if (( cs == 0 )); then
+        # lowercase both via parameter expansion trick
+        name="${name,,}"
+        pattern="${pattern,,}"
+    fi
+
+    # glob mode
+    if [[ "$pattern" == *'*'* || "$pattern" == *'?'* ]]; then
+        case "$name" in
+            $pattern) return 0 ;;
+            *) return 1 ;;
+        esac
+    fi
+
+    # substring mode
+    [[ "$name" == *"$pattern"* ]]
+}
+
+# ---- ALPHABET ----
+expand_alphabet() {
+    local input="$1"
+    local output="" i c start end start_i end_i
+
+    # ---- STEP 1: strip ONLY one level of outer brackets ----
+    #if [[ ${input:0:1} == "[" && ${input: -1} == "]" ]]; then
+    #    input="${input:1:-1}"
+    #fi
+
+    # ---- STEP 2: expand POSIX classes SAFELY ----
+    # handle both [:x:] and nested [[:x:]]
+    input="${input//\[\[:lower:\]\]/abcdefghijklmnopqrstuvwxyz}"
+    input="${input//\[:lower:\]/abcdefghijklmnopqrstuvwxyz}"
+
+    input="${input//\[\[:upper:\]\]/ABCDEFGHIJKLMNOPQRSTUVWXYZ}"
+    input="${input//\[:upper:\]/ABCDEFGHIJKLMNOPQRSTUVWXYZ}"
+
+    input="${input//\[\[:digit:\]\]/0123456789}"
+    input="${input//\[:digit:\]/0123456789}"
+
+    input="${input//\[\[:alnum:\]\]/abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789}"
+    input="${input//\[:alnum:\]/abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789}"
+
+    
+    # ---- STEP 3: validate ----
+    if [[ "$input" == *"[:"* || "$input" == *":]"* ]]; then
+    	printf "%s[ERROR] Unresolved POSIX class in: %s%s\n" "$C_RED" "$input" "$C_RESET" >&2
+    	exit 1
+    fi
+
+    if [[ ! "$input" =~ $PERMISSIVE_ALLOWED_CHARSET_REGEX ]]; then
+        printf "%s[ERROR] Invalid alphabet: %s%s\n" "$C_RED" "$input" "$C_RESET" >&2
+        exit 1
+    fi
+
+    # ---- STEP 4: expand ranges ----
+    i=0
+    while (( i < ${#input} )); do
+        c="${input:i:1}"
+	
+        if (( i + 2 < ${#input} )) && [[ "${input:i+1:1}" == "-" ]]; then
+            start="$c"
+            end="${input:i+2:1}"
+
+	        # validate range bounds ONLY here
+    		if [[ ! "$start" =~ $ALLOWED_CHARSET_REGEX || ! "$end" =~ $ALLOWED_CHARSET_REGEX ]]; then
+        		printf "%s[ERROR] Invalid range: %s-%s in %s%s\n" \
+            		"$C_RED" "$start" "$end" "$input" "$C_RESET" >&2
+        		exit 1
+    		fi
+            printf -v start_i '%d' "'$start"
+            printf -v end_i '%d' "'$end"
+
+            (( start_i > end_i )) && { tmp=$start_i; start_i=$end_i; end_i=$tmp; }
+
+            for ((j=start_i; j<=end_i; ++j)); do
+                printf -v char "\\$(printf '%03o' "$j")"
+                output+="$char"
+            done
+
+            ((i+=3))
+        else
+	    [[ "$c" == '[' || "$c" == ']' ]] || output+="$c"
+            ((++i))
+        fi
+    done
+
+    [[ -n "$output" ]] || {
+    	printf "%s[ERROR] Empty alphabet after parsing: %s%s\n" "$C_RED" "$input" "$C_RESET" >&2
+    	exit 1
+    }
+
+    # deduplicate while preserving order
+    dedup=""
+    local -A seen
+
+    for ((i=0; i<${#output}; ++i)); do
+    	c="${output:i:1}"
+    	[[ -z "${seen[$c]:-}" ]] && {
+        	dedup+="$c"
+        	seen[$c]=1
+    	}	
+    done
+
+    output="$dedup"
+
+    printf "%s" "$output"
+}
+
+alphabet="$(expand_alphabet "${2:-abcdefghijklmnopqrstuvwxyz}")"
+readonly alphabet
+
+char_in_row="${3:-4}"
+row_count="${4:-1}"
+job_count="${5:-1}"
+
+[[ "$char_in_row" =~ ^[1-9][0-9]*$ && \
+   "$row_count" =~ ^[1-9][0-9]*$ && \
+   "$job_count" =~ ^[1-9][0-9]*$ ]] || {
+    printf "%s[ERROR] char_in_row, row_count, and job_count must be integers > 0%s\n" "$C_RED" "$C_RESET" >&2
+    exit 1
+}
+
+readonly char_in_row row_count job_count
+
+# ---- RANDOM ----
+rand_str() {
+    local result="" i j
+    local len=${#alphabet}
+
+    for ((i=0; i<row_count; ++i)); do
+        ((i>0)) && result+=" "
+        for ((j=0; j<char_in_row; ++j)); do
+            result+="${alphabet:RANDOM%len:1}"
+        done
+    done
+    printf "%s" "$result"
+}
+
+# ---- RENAME ----
+rename_one() {
+    local file="$1"
+    local base="${file##*/}"
+
+    [[ -n "$include" ]] && ! matches_filter "$base" "$include" && return
+    [[ -n "$exclude" ]] && matches_filter "$base" "$exclude" && return
+
+    local prefix new_filename attempt=0
+
+    # If --prefix-only-if-missing, don't add the prefix if it's already there
+    if (( prefix_only_if_missing == 1 )) && [[ "$base" =~ ^[^[:space:]]+${delim_escaped} ]]; then
+        printf '%s[SKIP] Already prefixed:%s %s%s%s\n' \
+    "$C_CYAN" "$C_RESET" \
+    "$C_GRAY" "$base" "$C_RESET" 
+        return
+    fi
+
+    while :; do
+        prefix=$(rand_str)
+        new_filename="${prefix}${delim}${base}"
+
+        if [[ ! -e "$dir_path/$new_filename" ]]; then
+            if (( dry_run > 0 )); then
+                printf '%s[DRY]%s %s%s%s%s%s\n' \
+                    "$C_YELLOW" "$C_RESET" \
+                    "$BG_PURPLE$C_WHITE" "$prefix" "$C_RESET" \
+                    "$C_GRAY${delim}${base}$C_RESET"
+            else
+                if mv -- "$file" "$dir_path/$new_filename"; then
+                    printf '%s[OK]%s %s%s%s%s%s\n' \
+                        "$C_GREEN" "$C_RESET" \
+                        "$BG_PURPLE$C_WHITE" "$prefix" "$C_RESET" \
+                        "$C_GRAY${delim}${base}$C_RESET"
+                else
+                    printf "%s[ERROR] Failed: %s%s\n" "$C_RED" "$base" "$C_RESET"
+                fi
+            fi
+            return
+        fi
+
+        (( ++attempt > 10 )) && {
+            printf "%s[ERROR] Collision loop: %s%s\n" "$C_RED" "$base" "$C_RESET"
+            return
+        }
+    done
+}
+
+export -f rand_str rename_one
+export alphabet char_in_row row_count job_count dir_path dry_run delim include exclude case_sensitive
+
+# ---- MAIN ----
+# Default skip list: dotfiles plus the metadata files Windows/WSL scatter around.
+# Deliberately narrow — anything broader risks silently skipping real input.
+# Override entirely with --skip=PATTERN.
+if (( ${#skip_patterns[@]} == 0 )); then
+    skip_patterns=( ".*" "*desktop.ini*" "*Zone.Identifier*" )
+fi
+
+find_prune=()
+for pat in "${skip_patterns[@]}"; do
+    (( ${#find_prune[@]} )) && find_prune+=( -o )
+    find_prune+=( -iname "$pat" )
+done
+
+find "$dir_path" -mindepth 1 -maxdepth 1 \
+ \( "${find_prune[@]}" \) -prune \
+ -o -type f -print0 | 
+if (( job_count > 1 )); then 
+	xargs -0 -n1 -P "$job_count" bash -c 'rename_one "$1"' _ 
+else 
+	while IFS= read -r -d '' file; do
+	       	rename_one "$file" 
+	done 
+fi

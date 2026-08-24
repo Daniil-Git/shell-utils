@@ -1,0 +1,216 @@
+#!/usr/bin/env bash
+#
+# Prevent sourcing
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+    printf '\033[31m[ERROR] This script must be executed, not sourced.\033[0m\n' >&2
+    return 3 2>/dev/null || exit 3
+fi
+
+set -euo pipefail
+#shopt -s nullglob
+
+# ---- CONSTANTS ----
+readonly DELIM_DEFAULT="_"
+
+# ---- COLORS ----
+if [[ -t 1 && "$TERM" != "dumb" ]]; then
+    C_RESET=$'\033[0m'
+    C_RED=$'\033[31m'
+    C_GREEN=$'\033[32m'
+    C_YELLOW=$'\033[33m'
+    C_CYAN=$'\033[36m'
+    C_GRAY=$'\033[90m'
+
+    # highlight for removed prefix
+    C_BG_RED=$'\033[41m'
+    C_FG_WHITE=$'\033[97m'
+else
+    C_RESET=""
+    C_RED=""
+    C_GREEN=""
+    C_YELLOW=""
+    C_CYAN=""
+    C_GRAY=""
+    C_BG_RED=""
+    C_FG_WHITE=""
+fi
+
+readonly C_RESET C_RED C_GREEN C_YELLOW C_CYAN C_GRAY C_BG_RED C_FG_WHITE
+
+# ---- HELP ----
+show_help() {
+cat <<EOF
+Usage:
+  $0 <dir> <regex> [output_dir] [options]
+
+Arguments:
+  dir         Source directory
+  regex       Prefix regex (without delimiter)
+  output_dir  Optional output directory
+
+IMPORTANT:
+  - Do NOT include ^ or $ in regex
+  - Anchoring is handled internally for safety
+
+Description:
+  Removes prefix matching <regex> ending in optional [--delim] (default: "_"),
+  then renames AND moves file into optional [output_dir].
+
+Options:
+  --dry-run           Preview changes
+  --delim=CHARS       Override delimiter (default: "_")
+  --include=PATTERN   Filter filenames (glob or substring)
+  --exclude=PATTERN   Exclude filenames (glob or substring)
+  --case-sensitive    Case-sensitive include/exclude Filename Filtering
+
+Example:
+  $0 ./files '[a-z0-9 [:punct:]]+' --delim='_'
+  $0 ./files '[A-Z]+' --delim='-' ./out --dry-run
+  $0 ./files --dry-run --exclude='.*' '[:lower:]'
+
+EOF
+}
+
+# ---- FLAGS ----
+dry_run=0
+delim="$DELIM_DEFAULT"
+include=""
+exclude=""
+case_sensitive=0
+args=()
+
+while (( $# > 0 )); do
+    lower_flag="${1,,}"
+
+    case "$lower_flag" in
+        --dry-run) dry_run=1 ;;
+	--delim=*|--delimiter=*) delim="${1#*=}" ;;
+	--include=*) include="${1#*=}" ;;
+    	--exclude=*) exclude="${1#*=}" ;;
+    	--case-sensitive|--strict-case|--case-strict|--sensitive-case) case_sensitive=1 ;;
+        -h|--help) show_help; exit 0 ;;
+        *) args+=("$1") ;;
+    esac
+    shift
+done
+
+set -- "${args[@]}"
+
+# ---- ARGS ----
+(( $# < 2 )) && {
+    printf "%s[ERROR] Invalid arguments. Use --help%s\n" "$C_RED" "$C_RESET" >&2
+    exit 1
+}
+
+dir_path="$1"
+regex="$2"
+output_dir="${3:-$dir_path}"
+
+[[ ! -d "$dir_path" ]] && {
+    printf "%s[ERROR] Invalid dir: %s%s\n" "$C_RED" "$dir_path" "$C_RESET" >&2
+    exit 1
+}
+
+[[ ! -d "$output_dir" ]] && {
+    printf "%s[ERROR] Invalid output_dir: %s%s\n" "$C_RED" "$output_dir" "$C_RESET" >&2
+    exit 1
+}
+
+# ---- ESCAPE DELIMITER ----
+escape_regex() {
+    printf '%s' "$1" | sed -e 's/[][\.^$*+?(){}|]/\\&/g'
+}
+
+delim_escaped="$(escape_regex "$delim")"
+
+# Anchor internally (users must not provide ^ or $)
+if [[ "$regex" == *'^'* || "$regex" == *'$'* ]]; then
+    printf "%s[ERROR] Do not include ^ or $ in regex%s\n" "$C_RED" "$C_RESET" >&2
+    exit 1
+fi
+readonly FULL_REGEX="^(${regex})${delim_escaped}(.*)$"
+readonly dir_path output_dir regex delim delim_escaped
+
+
+matches_filter() {
+    local name="$1"
+    local pattern="$2"
+
+    [[ -z "$pattern" ]] && return 0
+
+    if (( case_sensitive == 0 )); then
+        name="${name,,}"
+        pattern="${pattern,,}"
+    fi
+
+    # glob mode
+    if [[ "$pattern" == *'*'* || "$pattern" == *'?'* ]]; then
+        case "$name" in
+            $pattern) return 0 ;;
+            *) return 1 ;;
+        esac
+    fi
+
+    # substring mode
+    [[ "$name" == *"$pattern"* ]]
+}
+
+# ---- RENAME / MOVE ----
+rename_one() {
+    local -r file="$1"
+    local -r base="${file##*/}"
+
+    [[ -n "$include" ]] && ! matches_filter "$base" "$include" && return
+    [[ -n "$exclude" ]] && matches_filter "$base" "$exclude" && return
+
+    local match_base="$base"
+    local match_regex="$FULL_REGEX"
+    
+    if [[ "$match_base" =~ $match_regex ]]; then
+        local -r prefix="${BASH_REMATCH[1]}"
+        local -r removed="${prefix}${delim}"
+        local -r new_name="${BASH_REMATCH[2]}"
+
+        [[ -z "$new_name" ]] && {
+            printf "%s[ERROR] Empty result after strip: %s%s\n" "$C_RED" "$base" "$C_RESET"
+            return
+        }
+
+        [[ "$base" == "$new_name" ]] && return
+
+        local -r new_path="$output_dir/$new_name"
+
+        if [[ -e "$new_path" ]]; then
+            printf "%s[ERROR] Collision: %s -> %s%s\n" "$C_RED" "$base" "$new_name" "$C_RESET"
+            return
+        fi
+
+        if (( dry_run > 0 )); then
+            printf '%s[DRY]%s %sRename:%s %s%s%s%s -> %s%s%s\n' \
+                "$C_YELLOW" "$C_RESET" \
+                "$C_CYAN" "$C_RESET" \
+                "$C_BG_RED" "$C_FG_WHITE" "$removed" "$C_RESET" \
+                "$C_GREEN" "$new_name" "$C_RESET"
+        else
+            if mv -- "$file" "$new_path"; then
+                printf '%s[OK]%s %sRename:%s %s%s%s%s -> %s%s%s\n' \
+                    "$C_GREEN" "$C_RESET" \
+                    "$C_CYAN" "$C_RESET" \
+                    "$C_BG_RED" "$C_FG_WHITE" "$removed" "$C_RESET" \
+                    "$C_GREEN" "$new_name" "$C_RESET"
+            else
+                printf "%s[ERROR] Failed: %s%s\n" "$C_RED" "$base" "$C_RESET"
+            fi
+        fi
+    fi
+}
+
+export -f rename_one
+export dir_path output_dir FULL_REGEX delim delim_escaped dry_run case_sensitive include exclude
+
+# ---- MAIN ----
+while IFS= read -r -d '' file; do
+    rename_one "$file"
+done < <(find "$dir_path" -mindepth 1 -maxdepth 1 -type f -print0)
+
+

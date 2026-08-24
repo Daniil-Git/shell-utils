@@ -1,0 +1,25 @@
+#!/usr/bin/env zsh
+# update-line — CLI wrapper around lib/files.sh:update_line
+#
+# Insert, replace or delete lines matching a substring, across one or more
+# files, preserving surrounding indentation.
+
+set -o pipefail
+
+readonly _SELF="${0:A}"
+readonly _LIB="${_SELF:h:h}/lib"
+
+if [[ ! -r "$_LIB/files.sh" ]]; then
+  print -u2 -- "update-line: cannot find lib/files.sh next to $_SELF"
+  exit 1
+fi
+
+source "$_LIB/text.sh"   2>/dev/null || true   # optional: nicer path display
+source "$_LIB/files.sh"  || exit 1
+
+if (( $# == 0 )); then
+  update_line --help
+  exit 2
+fi
+
+update_line "$@"

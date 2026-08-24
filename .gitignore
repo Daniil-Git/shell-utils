@@ -1,0 +1,10 @@
+*.tmp
+*.tmp.*
+*.bak
+*.bak.*
+*.backup
+*.update_line.*
+.env
+.env.gpg
+__pycache__/
+.DS_Store
