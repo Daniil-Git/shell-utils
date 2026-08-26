@@ -507,8 +507,11 @@ assert_status "clippaste --help -> 0" 0 clippaste --help
 assert_contains "clipcopy help lists the fallback chain" "OSC 52" "$(clipcopy --help 2>&1)"
 
 # With every backend masked, both must fail cleanly rather than hang or crash.
+# WSL_* and the cached probe must go too, or a real clip.exe on a WSL host
+# makes this succeed legitimately — passing on CI and failing on a dev box.
 (
-  unset DISPLAY WAYLAND_DISPLAY TMUX
+  unset DISPLAY WAYLAND_DISPLAY TMUX WSL_DISTRO_NAME WSL_INTEROP _WSL_INTEROP_OK
+  export WSL_INTEROP_PROBE=/nonexistent/cmd.exe
   _CLIP_RC=0; print -rn -- "x" | clipcopy >/dev/null 2>&1 || _CLIP_RC=$?
   (( _CLIP_RC != 0 )) || print -r -- "UNEXPECTED_SUCCESS"
 ) > "$TMP/clip.out" 2>&1

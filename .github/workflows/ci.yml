@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:          # lets you trigger a run by hand from the Actions tab
+
+# Least privilege: this workflow only ever reads the repo.
+permissions:
+  contents: read
+
+# A newer push to the same branch cancels the previous run rather than queuing
+# behind it. Saves minutes and gets you a verdict on the latest commit faster.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false        # one OS failing shouldn't hide the other's result
+      matrix:
+        os: [ubuntu-latest]
+        # macos-latest works too and proves BSD/GNU portability, but on a
+        # private repo macOS minutes bill at 10x. Add it when that's worth it.
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Everything else the suite needs — git, jq, curl, gpg, python3, awk,
+      # comm, column, shred — is already on the runner image.
+      - name: Install zsh and bc
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends zsh bc
+
+      # Fail with a readable list rather than a cryptic error 200 lines into
+      # the suite. Same principle the library itself uses.
+      - name: Verify prerequisites
+        run: |
+          missing=()
+          for c in zsh bash git awk bc comm diff find gpg jq curl python3 column shred base64; do
+            command -v "$c" >/dev/null 2>&1 || missing+=("$c")
+          done
+          if (( ${#missing[@]} )); then
+            printf '::error::missing commands: %s\n' "${missing[*]}"
+            exit 1
+          fi
+          printf 'zsh %s | git %s | gpg present | jq present\n' \
+            "$(zsh --version | awk '{print $2}')" "$(git --version | awk '{print $3}')"
+
+      - name: Run test suite
+        run: zsh tests/run.sh -v
+
+  shellcheck:
+    name: shellcheck (bin/)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # shellcheck ships on the runner image. Only bin/ is linted: those are
+      # bash. The lib/*.sh files are zsh, which shellcheck cannot parse.
+      # Report everything at warning level for visibility, but only FAIL the
+      # build on `error` — genuine bugs, not style. Tighten to --severity=warning
+      # once you've seen and cleared the report.
+      - name: Lint report (informational)
+        run: shellcheck --severity=warning bin/prefix-files bin/strip-prefix || true
+
+      - name: Lint gate (fails on errors)
+        run: shellcheck --severity=error bin/prefix-files bin/strip-prefix
+
+  syntax:
+    name: zsh syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install zsh
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends zsh
+
+      # Parse-only check across every zsh source. tests/run.sh is excluded: the
+      # test job executes it in full, and `zsh -n` resolves $(<file) at parse
+      # time, producing misleading "no such file" noise.
+      - name: Parse-check all zsh sources
+        run: |
+          rc=0
+          for f in lib/*.sh bin/update-line dotfiles/zshrc dotfiles/zshenv.template; do
+            if zsh -n "$f"; then
+              printf '  ok    %s\n' "$f"
+            else
+              printf '::error file=%s::zsh syntax error\n' "$f"
+              rc=1
+            fi
+          done
+          exit $rc

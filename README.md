@@ -1,5 +1,7 @@
 # shell-utils
 
+[![CI](https://github.com/Daniil-Git/shell-utils/actions/workflows/ci.yml/badge.svg)](https://github.com/Daniil-Git/shell-utils/actions/workflows/ci.yml)
+
 A small zsh toolkit of general-purpose shell utilities: filesystem assertions,
 safe batch git operations, disposable read-only worktrees, in-place line
 editing, INI inspection, a GPG-backed secret store, and a lean set of dotfiles.
@@ -239,6 +241,10 @@ in `~/.zshrc.local` and `~/.zshenv.local`, both sourced last if present.
 ```sh
 zsh tests/run.sh      # -v to list every passing check
 ```
+
+CI runs the same suite on every push and pull request
+(`.github/workflows/ci.yml`): the full suite on Ubuntu, a shellcheck gate over
+`bin/`, and a `zsh -n` parse check over every source file.
 
 199 checks, fully self-contained. Scratch git repos, files, an isolated `$HOME`
 and a stub GitLab API (on `127.0.0.1`) are created under a temp directory and
