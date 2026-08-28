@@ -580,7 +580,7 @@ section "hygiene"
 # specific names would itself be a leak.
 HOSTS="$(grep -rhoE '(https?://|git@)[A-Za-z0-9.-]+' "$ROOT"/lib "$ROOT"/bin "$ROOT"/dotfiles "$ROOT"/README.md 2>/dev/null \
          | sed -E 's#^(https?://|git@)##' | sort -u \
-         | grep -vE '^(host|([a-z]+\.)?example\.(com|org|invalid)|github\.com|localhost|127\.0\.0\.1)$' || true)"
+         | grep -vE '^(host|([a-z]+\.)?example\.(com|org|invalid)|github\.com|itunes\.apple\.com|play\.google\.com|localhost|127\.0\.0\.1)$' || true)"
 [[ -z "$HOSTS" ]] && ok "every referenced host is a placeholder or public forge" \
                  || nope "unexpected host referenced" "$HOSTS"
 

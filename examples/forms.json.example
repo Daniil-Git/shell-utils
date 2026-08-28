@@ -1,0 +1,40 @@
+{
+  "_comment": "webforms.load_form() — controls/data file. Rename to forms.json and fill values. `by` is any selenium By strategy (ID, NAME, CSS_SELECTOR, XPATH...). `type` ∈ input_text | textarea | checkbox | label_checkbox | radio | select | button | autocomplete | image_badge. `{var}` in value is substituted from the context dict you pass to load_form(); a missing key aborts BEFORE any browser interaction. autocomplete needs class_search: the class of the dropdown <ul> the site renders.",
+  "email": {
+    "description": "Email",
+    "by": "ID",
+    "locator": "login-email",
+    "type": "input_text",
+    "value": "{username}@"
+  },
+  "password": {
+    "description": "Password",
+    "by": "NAME",
+    "locator": "password",
+    "type": "input_text",
+    "value": "{password}"
+  },
+  "remember": {
+    "description": "Remember me",
+    "by": "ID",
+    "locator": "persist",
+    "type": "checkbox",
+    "value": true
+  },
+  "country": {
+    "description": "Country select",
+    "by": "ID",
+    "locator": "country",
+    "type": "select",
+    "value": ""
+  },
+  "app_search": {
+    "description": "App picker",
+    "by": "CSS_SELECTOR",
+    "locator": "#search",
+    "type": "autocomplete",
+    "class_search": "ac",
+    "value": "{app_name}",
+    "platform": "both"
+  }
+}

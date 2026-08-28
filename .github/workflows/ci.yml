@@ -32,8 +32,15 @@ jobs:
 
       # Everything else the suite needs — git, jq, curl, gpg, python3, awk,
       # comm, column, shred — is already on the runner image.
-      - name: Install zsh and bc
-        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends zsh bc
+      - name: Install test dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends zsh bc python3-pip
+
+      # webforms drives a real headless Chrome; mdtable/store_lookup are pure python.
+      - name: Install python modules
+        run: python3 -m pip install --quiet selenium
+
+      # Selenium Manager fetches a matching driver automatically on modern runners;
+      # Chrome itself is already on the image.
 
       # Fail with a readable list rather than a cryptic error 200 lines into
       # the suite. Same principle the library itself uses.
@@ -50,8 +57,11 @@ jobs:
           printf 'zsh %s | git %s | gpg present | jq present\n' \
             "$(zsh --version | awk '{print $2}')" "$(git --version | awk '{print $3}')"
 
-      - name: Run test suite
+      - name: Run shell test suite
         run: zsh tests/run.sh -v
+
+      - name: Run python module tests
+        run: zsh tests/py/run.sh -v
 
   shellcheck:
     name: shellcheck (bin/)

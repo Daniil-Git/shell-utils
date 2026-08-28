@@ -183,6 +183,24 @@ gitlab_token_rotate --days 90
 | `GITLAB_SECRET_NS` | `gitlab` | Secret-store namespace |
 | `GITLAB_TOKEN_DEFAULT_DAYS` | `90` | Default lifetime for new/rotated tokens |
 
+### `lib/py/` — python modules
+
+| Module | Purpose |
+|---|---|
+| `store_lookup.py` | Resolve iOS ids/bundle ids against the live iTunes Lookup API (region-fallback across storefronts) and probe Play-Store package existence. Never raises on lookup failure — reports unresolved |
+| `webforms.py` | Data-driven Selenium form engine: describe controls as data (`examples/forms.json.example`), the engine fills them — React-controlled inputs, overlay banners, stale elements, autocomplete matching |
+| `mdtable.py` | Edit a markdown table inside a remote document: fetch → transform rows → diff → guarded post with re-read verification. Transport-pluggable (`RestDoc` covers issue/article-style REST stores) |
+
+`webforms` and `mdtable` deliberately take configuration as *data*: swap the
+JSON/env file, and the same code drives a different site or document.
+
+Placeholder files in `examples/` document every consumed field with the parsing
+style each loader expects — copy, rename, fill. Tokens are never among them;
+they belong to the encrypted store.
+
+Tests: `zsh tests/py/run.sh` (the live-Chrome group skips when selenium or a
+chrome binary is absent).
+
 ### `bin/` — standalone executables
 
 | Script | Purpose |
@@ -239,7 +257,8 @@ in `~/.zshrc.local` and `~/.zshenv.local`, both sourced last if present.
 ## Tests
 
 ```sh
-zsh tests/run.sh      # -v to list every passing check
+zsh tests/run.sh      # shell libraries, bin, dotfiles — -v to list every check
+zsh tests/py/run.sh   # python modules (live headless Chrome where available)
 ```
 
 CI runs the same suite on every push and pull request
